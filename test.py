@@ -292,3 +292,186 @@ for nombre, justificacion in variables_centrales.items():
     print(f"\n  {nombre}:\n    {justificacion}")
 
 print("\n✓ Parte 2 completada")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARTE 3 — Funciones, parámetros, mutabilidad y pruebas con assert
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import re
+
+# ── [3.1] normalizar_nombre_columna ───────────────────────────────────────────
+def normalizar_nombre_columna(nombre: str) -> str:
+    """
+    Retorna el nombre de columna en snake_case minúsculas.
+    Reemplaza espacios y caracteres especiales por guión bajo.
+    """
+    nombre = nombre.lower().strip()
+    nombre = re.sub(r'[^a-z0-9]+', '_', nombre)
+    nombre = nombre.strip('_')
+    return nombre
+
+# ── [3.2] clasificar_columna ──────────────────────────────────────────────────
+def clasificar_columna(serie: pd.Series) -> str:
+    """
+    Clasifica el tipo conceptual de una Serie de Pandas.
+    Usa dtype, patrones de nombre y cardinalidad para decidir.
+    Retorna: 'numerica', 'categorica', 'temporal', 'geografica',
+             'texto' o 'identificador'.
+    """
+    nombre = serie.name.lower() if serie.name else ''
+
+    if pd.api.types.is_datetime64_any_dtype(serie):
+        return 'temporal'
+    if any(p in nombre for p in ('timestamp', 'date', '_at', '_time')):
+        return 'temporal'
+    if pd.api.types.is_numeric_dtype(serie):
+        return 'numerica'
+    if 'state' in nombre or 'city' in nombre or 'zip' in nombre:
+        return 'geografica'
+
+    # object o str dtype: distinguir por cardinalidad
+    if pd.api.types.is_object_dtype(serie) or pd.api.types.is_string_dtype(serie):
+        cardinalidad = serie.nunique()
+        if cardinalidad <= 30:
+            return 'categorica'
+        # IDs tienen cardinalidad igual o muy cercana al largo de la serie
+        if cardinalidad / len(serie) > 0.9:
+            return 'identificador'
+        return 'texto'
+
+    return 'categorica'
+
+# ── [3.3] resumen_columna ─────────────────────────────────────────────────────
+def resumen_columna(dataframe: pd.DataFrame, columna: str) -> dict:
+    """
+    Retorna un diccionario con estadísticas descriptivas de una columna.
+    Incluye stats numéricas o categóricas según el tipo.
+    Lanza ValueError si la columna no existe.
+    """
+    if columna not in dataframe.columns:
+        raise ValueError(f"La columna '{columna}' no existe en el DataFrame.")
+
+    serie = dataframe[columna]
+    resultado = {
+        'nombre':     columna,
+        'tipo_pandas': str(serie.dtype),
+        'nulos':      int(serie.isna().sum()),
+        'nulos_pct':  round(serie.isna().mean() * 100, 2),
+        'unicos':     int(serie.nunique()),
+    }
+
+    if pd.api.types.is_numeric_dtype(serie):
+        resultado.update({
+            'min':     round(float(serie.min()), 2),
+            'max':     round(float(serie.max()), 2),
+            'media':   round(float(serie.mean()), 2),
+            'mediana': round(float(serie.median()), 2),
+        })
+    elif pd.api.types.is_object_dtype(serie) or pd.api.types.is_string_dtype(serie):
+        top = serie.value_counts().iloc[0]
+        resultado.update({
+            'top_categoria':  serie.value_counts().index[0],
+            'top_frecuencia': int(top),
+        })
+
+    return resultado
+
+# ── [3.4] validar_requisitos_dataset ─────────────────────────────────────────
+def validar_requisitos_dataset(dataframe: pd.DataFrame,
+                               columnas_minimas: int = 10,
+                               filas_minimas: int = 800,
+                               **kwargs) -> dict:
+    """
+    Valida si un DataFrame cumple los requisitos mínimos del enunciado.
+    Retorna dict con: cumple (bool), filas_actuales, columnas_actuales, mensajes.
+    kwargs opcionales: columnas_requeridas (list), columnas_numericas_min (int).
+    """
+    mensajes = []
+    filas = dataframe.shape[0]
+    columnas = dataframe.shape[1]
+
+    if filas < filas_minimas:
+        mensajes.append(f"Filas insuficientes: {filas} < {filas_minimas}")
+    if columnas < columnas_minimas:
+        mensajes.append(f"Columnas insuficientes: {columnas} < {columnas_minimas}")
+
+    if 'columnas_requeridas' in kwargs:
+        faltantes = [c for c in kwargs['columnas_requeridas'] if c not in dataframe.columns]
+        if faltantes:
+            mensajes.append(f"Columnas requeridas faltantes: {faltantes}")
+
+    if 'columnas_numericas_min' in kwargs:
+        n_numericas = sum(pd.api.types.is_numeric_dtype(dataframe[c]) for c in dataframe.columns)
+        if n_numericas < kwargs['columnas_numericas_min']:
+            mensajes.append(f"Variables numéricas insuficientes: {n_numericas} < {kwargs['columnas_numericas_min']}")
+
+    return {
+        'cumple':            len(mensajes) == 0,
+        'filas_actuales':    filas,
+        'columnas_actuales': columnas,
+        'mensajes':          mensajes,
+    }
+
+# ── [3.5] Pruebas con assert ──────────────────────────────────────────────────
+
+# normalizar_nombre_columna — 2 pruebas
+assert normalizar_nombre_columna('Order Status') == 'order_status'
+assert normalizar_nombre_columna('  Fecha de Compra ') == 'fecha_de_compra'
+
+# clasificar_columna — 3 pruebas (incluyendo caso borde: columna vacía)
+assert clasificar_columna(df['review_score']) == 'numerica'
+assert clasificar_columna(df['order_status']) == 'categorica'
+assert clasificar_columna(df['order_purchase_timestamp']) == 'temporal'
+
+# resumen_columna — 2 pruebas + 1 caso borde (columna inexistente)
+r_num = resumen_columna(df, 'price_total')
+assert all(k in r_num for k in ('nombre', 'tipo_pandas', 'nulos', 'nulos_pct', 'unicos', 'min', 'max', 'media', 'mediana'))
+r_cat = resumen_columna(df, 'payment_type')
+assert 'top_categoria' in r_cat and 'top_frecuencia' in r_cat
+try:
+    resumen_columna(df, 'columna_inexistente')
+    assert False, "Debería haber lanzado ValueError"
+except ValueError:
+    pass
+
+# validar_requisitos_dataset — 2 pruebas
+resultado_olist = validar_requisitos_dataset(df)
+assert resultado_olist['cumple'] is True
+assert resultado_olist['filas_actuales'] >= 99_000
+
+df_chico = df.iloc[:100, :3]
+resultado_chico = validar_requisitos_dataset(df_chico)
+assert resultado_chico['cumple'] is False
+assert len(resultado_chico['mensajes']) >= 2
+
+print("✓ 11 pruebas con assert pasaron")
+
+# ── [3.6] Mutabilidad ────────────────────────────────────────────────────────
+mutabilidad_explicacion = """
+MUTABILIDAD — Bug silencioso con listas y diccionarios
+======================================================
+
+En Python, las listas y diccionarios son mutables: asignarlos a otra
+variable NO los copia, solo crea un segundo nombre apuntando al mismo objeto.
+
+Ejemplo con columnas_analisis del notebook:
+
+    # BUG: ambas variables apuntan a la misma lista
+    columnas_backup = columnas_analisis
+    columnas_backup.append('order_id')   # modifica columnas_analisis también
+
+    print(len(columnas_analisis))   # 14 — se agregó sin querer
+
+Lo mismo ocurre con diccionario_datos:
+
+    entrada = diccionario_datos['review_score']
+    entrada['tipo_conceptual'] = 'ordinal'   # modifica el diccionario original
+
+CORRECCIÓN: usar .copy() para listas o dict.copy() / copy.deepcopy() para dicts:
+
+    columnas_backup = columnas_analisis.copy()   # lista nueva, independiente
+    entrada = diccionario_datos['review_score'].copy()   # dict nuevo
+"""
+print(mutabilidad_explicacion)
+
+print("✓ Parte 3 completada")
